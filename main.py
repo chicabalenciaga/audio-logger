@@ -1,4 +1,5 @@
 import os
+import time
 import json
 import requests
 import numpy as np
@@ -85,7 +86,7 @@ def main():
         "searchCategoryType": "Audio",
         "creatorTargetId": GROUP_ID,
         "creatorType": "Group",
-        "limit": 10
+        "limit": 100
     }
 
     r = requests.get(url, params=params, timeout=15)
@@ -94,11 +95,6 @@ def main():
         return
 
     items = r.json().get("data", [])
-    if not seen and items:
-        for item in items:
-            seen.add(str(item["asset"]["id"]))
-        save_seen(seen)
-        return
 
     for item in reversed(items):
         asset = item.get("asset", {})
@@ -107,6 +103,7 @@ def main():
             analyze_and_send(asset)
             seen.add(aid)
             save_seen(seen)
+            time.sleep(2)
 
 if __name__ == "__main__":
     main()
