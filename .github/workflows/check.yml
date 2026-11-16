@@ -4,6 +4,10 @@ on:
     - cron: '*/5 * * * *'
   workflow_dispatch:
 
+concurrency:
+  group: audio-logger-run
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
