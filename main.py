@@ -14,7 +14,7 @@ GROUP_ID = "648972497"
 WEBHOOK_URL = os.environ["WEBHOOKURL"]
 ROBLOX_COOKIE = os.environ["ROBLOXCOOKIE"]
 SEEN_FILE = "seen_audios.json"
-BATCH_SIZE = 50
+BATCH_SIZE = 50  # Máximo de audios por ejecución para evitar bloqueos y solapamientos
 
 SESSION = requests.Session()
 SESSION.cookies[".ROBLOSECURITY"] = ROBLOX_COOKIE
@@ -51,12 +51,11 @@ def generate_waveform(audio_data, rate):
     
     channels = [audio_data, audio_data] if audio_data.ndim == 1 else [audio_data[:, 0], audio_data[:, 1]]
     labels = ["L", "R"]
-    num_bins = 1800  # Number of points across the width for a smooth envelope
+    num_bins = 1800  # Puntos para suavizar la onda
 
     for ax, ch, lbl in zip(axes, channels, labels):
         ax.set_facecolor("#14151b")
         
-        # Smooth envelope binning (fixes choppiness)
         chunk_size = max(1, len(ch) // num_bins)
         trimmed_len = len(ch) - (len(ch) % chunk_size)
         ch_trimmed = ch[:trimmed_len]
@@ -67,7 +66,6 @@ def generate_waveform(audio_data, rate):
         
         time_axis = np.linspace(0, duration, len(peaks_max))
         
-        # Draw smooth envelope with filled transparency
         ax.plot(time_axis, peaks_max, color="#ff2a38", linewidth=0.7, alpha=0.9)
         ax.plot(time_axis, peaks_min, color="#ff2a38", linewidth=0.7, alpha=0.9)
         ax.fill_between(time_axis, peaks_min, peaks_max, color="#ff2a38", alpha=0.25)
@@ -100,14 +98,21 @@ def fetch_all_group_audios():
     audios = []
     cursor = ""
     while True:
-        url = f"https://itemconfiguration.roblox.com/v1/creations/get-assets?assetType=Audio&groupId={GROUP_ID}&limit=50&cursor={cursor}"
+        url = f"https://itemconfiguration.roblox.com/v1/creations/get-assets?assetType=Audio&groupId={GROUP_ID}&limit=50"
+        if cursor:
+            url += f"&cursor={cursor}"
+            
         r = SESSION.get(url, timeout=15)
         if r.status_code != 200:
             print(f"Failed to fetch group assets ({r.status_code}): {r.text}")
             break
         payload = r.json()
         page_items = payload.get("data", [])
+        if not page_items:
+            break
         audios.extend(page_items)
+        print(f"Fetched page with {len(page_items)} audios (Total so far: {len(audios)})")
+        
         cursor = payload.get("nextPageCursor")
         if not cursor:
             break
