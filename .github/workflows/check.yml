@@ -32,6 +32,7 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
+          git pull --rebase origin main || true
           git add seen_audios.json || true
           git commit -m "Update seen audios" || exit 0
           git push
