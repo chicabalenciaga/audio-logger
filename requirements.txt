@@ -1,0 +1,5 @@
+requests
+soundfile
+pyloudnorm
+numpy
+matplotlib
