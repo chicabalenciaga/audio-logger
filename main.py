@@ -22,6 +22,20 @@ def save_seen(seen_set):
     with open(SEEN_FILE, "w") as f:
         json.dump(sorted(list(seen_set)), f)
 
+def get_thumbnail(asset_id):
+    try:
+        r = requests.get(
+            f"https://thumbnails.roblox.com/v1/assets?assetIds={asset_id}&returnPolicy=PlaceHolder&size=420x420&format=Png",
+            timeout=10
+        )
+        if r.status_code == 200:
+            data = r.json().get("data", [])
+            if data and data[0].get("imageUrl"):
+                return data[0]["imageUrl"]
+    except Exception:
+        pass
+    return None
+
 def generate_waveform(audio_data):
     fig, axes = plt.subplots(2, 1, figsize=(8, 2.5), facecolor="#0a0a0a")
     plt.subplots_adjust(hspace=0.15, left=0.02, right=0.98, top=0.92, bottom=0.08)
@@ -58,6 +72,7 @@ def analyze_and_send(asset):
     peak_linear = np.max(np.abs(data))
     peak_db = 20 * np.log10(peak_linear) if peak_linear > 0 else -100.0
     waveform_buf = generate_waveform(data)
+    thumb_url = get_thumbnail(asset_id)
 
     embed = {
         "title": "🔊 Audio Discovered",
@@ -73,6 +88,9 @@ def analyze_and_send(asset):
         ],
         "image": {"url": "attachment://waveform.png"}
     }
+
+    if thumb_url:
+        embed["thumbnail"] = {"url": thumb_url}
 
     files = {
         "file1": ("waveform.png", waveform_buf, "image/png"),
