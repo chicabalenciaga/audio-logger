@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import json
 import requests
@@ -118,10 +119,14 @@ def analyze_and_send(asset):
     if thumb_url:
         embed["thumbnail"] = {"url": thumb_url}
 
+    safe_name = re.sub(r'[^a-zA-Z0-9_\-\. ]', '', name).strip() or asset_id
     files = {
         "file1": ("waveform.png", waveform_buf, "image/png"),
     }
-    requests.post(WEBHOOK_URL, data={"payload_json": json.dumps({"embeds": [embed]})}, files=files, timeout=20)
+    if size_mb < 9.5:
+        files["file2"] = (f"{safe_name}.ogg", BytesIO(ogg_bytes), "audio/ogg")
+
+    requests.post(WEBHOOK_URL, data={"payload_json": json.dumps({"embeds": [embed]})}, files=files, timeout=25)
 
 def main():
     seen = load_seen()
