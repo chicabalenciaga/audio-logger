@@ -13,6 +13,7 @@ GROUP_ID = "648972497"
 WEBHOOK_URL = os.environ["WEBHOOKURL"]
 ROBLOX_COOKIE = os.environ["ROBLOXCOOKIE"]
 SEEN_FILE = "seen_audios.json"
+BATCH_SIZE = 50  # Sends up to 50 audios per run so runs never overlap
 
 SESSION = requests.Session()
 SESSION.cookies[".ROBLOSECURITY"] = ROBLOX_COOKIE
@@ -64,23 +65,52 @@ def fetch_all_group_audios():
     audios = []
     cursor = ""
     while True:
-        url = f"https://itemconfiguration.roblox.com/v1/creations/get-assets?assetType=Audio&groupId={GROUP_ID}&limit=100&cursor={cursor}"
+        url = f"https://itemconfiguration.roblox.com/v1/creations/get-assets?assetType=Audio&groupId={GROUP_ID}&limit=50&cursor={cursor}"
         r = SESSION.get(url, timeout=15)
         if r.status_code != 200:
             print(f"Failed to fetch group assets ({r.status_code}): {r.text}")
             break
         payload = r.json()
-        audios.extend(payload.get("data", []))
+        page_items = payload.get("data", [])
+        audios.extend(page_items)
         cursor = payload.get("nextPageCursor")
         if not cursor:
             break
+        time.sleep(0.3)
     return audios
 
 def download_private_audio(asset_id):
     r = SESSION.get(f"https://assetdelivery.roblox.com/v1/asset/?id={asset_id}", timeout=20)
     if r.status_code == 200 and len(r.content) > 100:
         return r.content
+    print(f"Download failed for {asset_id}: status {r.status_code}")
     return None
+
+def post_to_discord(embed, waveform_buf, ogg_bytes, safe_name, size_mb):
+    for attempt in range(3):
+        waveform_buf.seek(0)
+        files = {
+            "file1": ("waveform.png", waveform_buf, "image/png"),
+        }
+        if size_mb < 9.5:
+            files["file2"] = (f"{safe_name}.ogg", BytesIO(ogg_bytes), "audio/ogg")
+
+        res = requests.post(
+            WEBHOOK_URL,
+            data={"payload_json": json.dumps({"embeds": [embed]})},
+            files=files,
+            timeout=30
+        )
+        if res.status_code in (200, 204):
+            return True
+        if res.status_code == 429:
+            retry_after = res.json().get("retry_after", 5)
+            print(f"Discord rate limit hit, waiting {retry_after}s...")
+            time.sleep(float(retry_after) + 0.5)
+        else:
+            print(f"Discord error {res.status_code}: {res.text}")
+            break
+    return False
 
 def analyze_and_send(asset):
     asset_id = str(asset["assetId"])
@@ -88,8 +118,7 @@ def analyze_and_send(asset):
 
     ogg_bytes = download_private_audio(asset_id)
     if not ogg_bytes:
-        print(f"Could not download audio {asset_id}")
-        return
+        return False
 
     size_mb = len(ogg_bytes) / (1024 * 1024)
     data, rate = sf.read(BytesIO(ogg_bytes))
@@ -120,26 +149,26 @@ def analyze_and_send(asset):
         embed["thumbnail"] = {"url": thumb_url}
 
     safe_name = re.sub(r'[^a-zA-Z0-9_\-\. ]', '', name).strip() or asset_id
-    files = {
-        "file1": ("waveform.png", waveform_buf, "image/png"),
-    }
-    if size_mb < 9.5:
-        files["file2"] = (f"{safe_name}.ogg", BytesIO(ogg_bytes), "audio/ogg")
-
-    requests.post(WEBHOOK_URL, data={"payload_json": json.dumps({"embeds": [embed]})}, files=files, timeout=25)
+    return post_to_discord(embed, waveform_buf, ogg_bytes, safe_name, size_mb)
 
 def main():
     seen = load_seen()
     items = fetch_all_group_audios()
     print(f"Found {len(items)} total group audios.")
 
+    sent_this_run = 0
     for asset in reversed(items):
+        if sent_this_run >= BATCH_SIZE:
+            print(f"Reached batch limit ({BATCH_SIZE}). Remaining audios will continue on the next run.")
+            break
         aid = str(asset.get("assetId"))
         if aid and aid not in seen:
-            analyze_and_send(asset)
-            seen.add(aid)
-            save_seen(seen)
-            time.sleep(2)
+            print(f"[{sent_this_run + 1}/{BATCH_SIZE}] Processing {aid} ({asset.get('name')})...")
+            if analyze_and_send(asset):
+                seen.add(aid)
+                save_seen(seen)
+                sent_this_run += 1
+            time.sleep(2.5)
 
 if __name__ == "__main__":
     main()
