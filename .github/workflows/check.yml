@@ -22,6 +22,7 @@ jobs:
       - name: Run script
         env:
           WEBHOOKURL: ${{ secrets.WEBHOOKURL }}
+          ROBLOXCOOKIE: ${{ secrets.ROBLOXCOOKIE }}
         run: python main.py
       - name: Save seen audios
         run: |
