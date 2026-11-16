@@ -10,7 +10,12 @@ from io import BytesIO
 
 GROUP_ID = "648972497"
 WEBHOOK_URL = os.environ["WEBHOOKURL"]
+ROBLOX_COOKIE = os.environ["ROBLOXCOOKIE"]
 SEEN_FILE = "seen_audios.json"
+
+SESSION = requests.Session()
+SESSION.cookies[".ROBLOSECURITY"] = ROBLOX_COOKIE
+SESSION.headers.update({"User-Agent": "Mozilla/5.0"})
 
 def load_seen():
     if os.path.exists(SEEN_FILE):
@@ -24,7 +29,7 @@ def save_seen(seen_set):
 
 def get_thumbnail(asset_id):
     try:
-        r = requests.get(
+        r = SESSION.get(
             f"https://thumbnails.roblox.com/v1/assets?assetIds={asset_id}&returnPolicy=PlaceHolder&size=420x420&format=Png",
             timeout=10
         )
@@ -54,16 +59,37 @@ def generate_waveform(audio_data):
     buf.seek(0)
     return buf
 
-def analyze_and_send(asset):
-    asset_id = str(asset["id"])
-    name = asset.get("name", "Unknown")
-    creator = asset.get("creator", {}).get("name", "Maleficioo")
+def fetch_all_group_audios():
+    audios = []
+    cursor = ""
+    while True:
+        url = f"https://itemconfiguration.roblox.com/v1/creations/get-assets?assetType=Audio&groupId={GROUP_ID}&limit=100&cursor={cursor}"
+        r = SESSION.get(url, timeout=15)
+        if r.status_code != 200:
+            print(f"Failed to fetch group assets ({r.status_code}): {r.text}")
+            break
+        payload = r.json()
+        audios.extend(payload.get("data", []))
+        cursor = payload.get("nextPageCursor")
+        if not cursor:
+            break
+    return audios
 
-    resp = requests.get(f"https://assetdelivery.roblox.com/v1/asset/?id={asset_id}", timeout=20)
-    if resp.status_code != 200:
+def download_private_audio(asset_id):
+    r = SESSION.get(f"https://assetdelivery.roblox.com/v1/asset/?id={asset_id}", timeout=20)
+    if r.status_code == 200 and len(r.content) > 100:
+        return r.content
+    return None
+
+def analyze_and_send(asset):
+    asset_id = str(asset["assetId"])
+    name = asset.get("name", "Unknown")
+
+    ogg_bytes = download_private_audio(asset_id)
+    if not ogg_bytes:
+        print(f"Could not download audio {asset_id}")
         return
 
-    ogg_bytes = resp.content
     size_mb = len(ogg_bytes) / (1024 * 1024)
     data, rate = sf.read(BytesIO(ogg_bytes))
     mins, secs = divmod(int(len(data) / rate), 60)
@@ -76,7 +102,7 @@ def analyze_and_send(asset):
 
     embed = {
         "title": "🔊 Audio Discovered",
-        "description": f"**{name}** by {creator}",
+        "description": f"**{name}** by Maleficioo",
         "color": 15073318,
         "fields": [
             {"name": "Audio ID", "value": f"`{asset_id}`", "inline": True},
@@ -99,24 +125,11 @@ def analyze_and_send(asset):
 
 def main():
     seen = load_seen()
-    url = "https://apis.roblox.com/toolbox-service/v2/assets:search"
-    params = {
-        "searchCategoryType": "Audio",
-        "creatorTargetId": GROUP_ID,
-        "creatorType": "Group",
-        "limit": 100
-    }
+    items = fetch_all_group_audios()
+    print(f"Found {len(items)} total group audios.")
 
-    r = requests.get(url, params=params, timeout=15)
-    if r.status_code != 200:
-        print("Failed to fetch:", r.status_code)
-        return
-
-    items = r.json().get("data", [])
-
-    for item in reversed(items):
-        asset = item.get("asset", {})
-        aid = str(asset.get("id"))
+    for asset in reversed(items):
+        aid = str(asset.get("assetId"))
         if aid and aid not in seen:
             analyze_and_send(asset)
             seen.add(aid)
