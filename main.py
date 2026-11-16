@@ -14,7 +14,7 @@ GROUP_ID = "648972497"
 WEBHOOK_URL = os.environ["WEBHOOKURL"]
 ROBLOX_COOKIE = os.environ["ROBLOXCOOKIE"]
 SEEN_FILE = "seen_audios.json"
-BATCH_SIZE = 50  # Límite de audios por ejecución
+BATCH_SIZE = 50
 
 SESSION = requests.Session()
 SESSION.cookies[".ROBLOSECURITY"] = ROBLOX_COOKIE
@@ -51,12 +51,26 @@ def generate_waveform(audio_data, rate):
     
     channels = [audio_data, audio_data] if audio_data.ndim == 1 else [audio_data[:, 0], audio_data[:, 1]]
     labels = ["L", "R"]
-    step = max(1, len(channels[0]) // 2500)
+    num_bins = 1800  # Number of points across the width for a smooth envelope
 
     for ax, ch, lbl in zip(axes, channels, labels):
         ax.set_facecolor("#14151b")
-        time_axis = np.linspace(0, duration, len(ch))
-        ax.plot(time_axis[::step], ch[::step], color="#ff2a38", linewidth=0.7)
+        
+        # Smooth envelope binning (fixes choppiness)
+        chunk_size = max(1, len(ch) // num_bins)
+        trimmed_len = len(ch) - (len(ch) % chunk_size)
+        ch_trimmed = ch[:trimmed_len]
+        
+        reshaped = ch_trimmed.reshape(-1, chunk_size)
+        peaks_max = np.max(reshaped, axis=1)
+        peaks_min = np.min(reshaped, axis=1)
+        
+        time_axis = np.linspace(0, duration, len(peaks_max))
+        
+        # Draw smooth envelope with filled transparency
+        ax.plot(time_axis, peaks_max, color="#ff2a38", linewidth=0.7, alpha=0.9)
+        ax.plot(time_axis, peaks_min, color="#ff2a38", linewidth=0.7, alpha=0.9)
+        ax.fill_between(time_axis, peaks_min, peaks_max, color="#ff2a38", alpha=0.25)
         
         ax.set_ylim(-1.05, 1.05)
         ax.set_xlim(0, duration if duration > 0 else 1)
@@ -138,7 +152,6 @@ def analyze_and_send(asset):
     name = asset.get("name", "Unknown")
     created_raw = asset.get("created", "")
     
-    # Formatear la fecha de subida si viene de la API
     try:
         dt = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
         upload_date = dt.strftime("%B %d, %Y %I:%M %p")
@@ -160,11 +173,10 @@ def analyze_and_send(asset):
     waveform_buf = generate_waveform(data, rate)
     thumb_url = get_thumbnail(asset_id)
 
-    # Estructura limpia y ordenada idéntica a la imagen de referencia
     embed = {
         "title": f"🔊 {name}",
         "description": "*No description*",
-        "color": 16711680,  # Rojo vibrante
+        "color": 16711680,
         "fields": [
             {"name": "ID", "value": f"`{asset_id}`", "inline": True},
             {"name": "Status", "value": "✅ Approved", "inline": True},
