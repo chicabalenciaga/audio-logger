@@ -1,0 +1,32 @@
+name: Check Roblox Group Audio
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  run-checker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y libsndfile1
+          pip install -r requirements.txt
+      - name: Run script
+        env:
+          WEBHOOKURL: ${{ secrets.WEBHOOKURL }}
+        run: python main.py
+      - name: Save seen audios
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add seen_audios.json || true
+          git commit -m "Update seen audios" || exit 0
+          git push
