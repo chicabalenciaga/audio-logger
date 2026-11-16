@@ -14,7 +14,7 @@ GROUP_ID = "648972497"
 WEBHOOK_URL = os.environ["WEBHOOKURL"]
 ROBLOX_COOKIE = os.environ["ROBLOXCOOKIE"]
 SEEN_FILE = "seen_audios.json"
-BATCH_SIZE = 50  # Máximo de audios por ejecución para evitar bloqueos y solapamientos
+BATCH_SIZE = 50  # Máximo de audios por ejecución
 
 SESSION = requests.Session()
 SESSION.cookies[".ROBLOSECURITY"] = ROBLOX_COOKIE
@@ -51,7 +51,7 @@ def generate_waveform(audio_data, rate):
     
     channels = [audio_data, audio_data] if audio_data.ndim == 1 else [audio_data[:, 0], audio_data[:, 1]]
     labels = ["L", "R"]
-    num_bins = 1800  # Puntos para suavizar la onda
+    num_bins = 1800
 
     for ax, ch, lbl in zip(axes, channels, labels):
         ax.set_facecolor("#14151b")
@@ -97,6 +97,7 @@ def generate_waveform(audio_data, rate):
 def fetch_all_group_audios():
     audios = []
     cursor = ""
+    page_num = 1
     while True:
         url = f"https://itemconfiguration.roblox.com/v1/creations/get-assets?assetType=Audio&groupId={GROUP_ID}&limit=50"
         if cursor:
@@ -109,13 +110,19 @@ def fetch_all_group_audios():
         payload = r.json()
         page_items = payload.get("data", [])
         if not page_items:
+            print(f"Página {page_num}: No se encontraron más ítems.")
             break
+            
         audios.extend(page_items)
-        print(f"Fetched page with {len(page_items)} audios (Total so far: {len(audios)})")
+        print(f"-> Página {page_num} cargada: {len(page_items)} audios (Total acumulado: {len(audios)})")
         
-        cursor = payload.get("nextPageCursor")
+        # Roblox puede devolver el cursor con diferentes nombres según la versión de su API
+        cursor = payload.get("nextPageCursor") or payload.get("cursor") or payload.get("nextCursor")
         if not cursor:
+            print("Se han recorrido todas las páginas de Roblox.")
             break
+            
+        page_num += 1
         time.sleep(0.3)
     return audios
 
@@ -207,16 +214,19 @@ def analyze_and_send(asset):
 def main():
     seen = load_seen()
     items = fetch_all_group_audios()
-    print(f"Found {len(items)} total group audios.")
+    print(f"Total de audios encontrados en el grupo: {len(items)}")
+
+    # Ordenar estrictamente por fecha de creación (del más antiguo al más nuevo)
+    items.sort(key=lambda x: x.get("created", ""))
 
     sent_this_run = 0
-    for asset in reversed(items):
+    for asset in items:
         if sent_this_run >= BATCH_SIZE:
-            print(f"Reached batch limit ({BATCH_SIZE}). Remaining audios will continue on the next run.")
+            print(f"Límite de lote alcanzado ({BATCH_SIZE}). Los siguientes continuarán en la próxima ejecución.")
             break
         aid = str(asset.get("assetId"))
         if aid and aid not in seen:
-            print(f"[{sent_this_run + 1}/{BATCH_SIZE}] Processing {aid} ({asset.get('name')}) ...")
+            print(f"[{sent_this_run + 1}/{BATCH_SIZE}] Procesando ID {aid} ({asset.get('name')}) ...")
             if analyze_and_send(asset):
                 seen.add(aid)
                 save_seen(seen)
