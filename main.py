@@ -14,11 +14,14 @@ GROUP_ID = "648972497"
 WEBHOOK_URL = os.environ["WEBHOOKURL"]
 ROBLOX_COOKIE = os.environ["ROBLOXCOOKIE"]
 SEEN_FILE = "seen_audios.json"
-BATCH_SIZE = 50  # Máximo de audios por ejecución
+BATCH_SIZE = 50
 
 SESSION = requests.Session()
 SESSION.cookies[".ROBLOSECURITY"] = ROBLOX_COOKIE
-SESSION.headers.update({"User-Agent": "Mozilla/5.0"})
+SESSION.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Referer": "https://create.roblox.com/"
+})
 
 def load_seen():
     if os.path.exists(SEEN_FILE):
@@ -99,31 +102,38 @@ def fetch_all_group_audios():
     cursor = ""
     page_num = 1
     while True:
-        url = f"https://itemconfiguration.roblox.com/v1/creations/get-assets?assetType=Audio&groupId={GROUP_ID}&limit=50"
+        # Probamos con un límite mayor (100) para barrer más rápido
+        url = f"https://itemconfiguration.roblox.com/v1/creations/get-assets?assetType=Audio&groupId={GROUP_ID}&limit=100"
         if cursor:
             url += f"&cursor={cursor}"
             
         r = SESSION.get(url, timeout=15)
+        print(f"Página {page_num} - Status HTTP: {r.status_code}")
+        
         if r.status_code != 200:
-            print(f"Failed to fetch group assets ({r.status_code}): {r.text}")
+            print(f"Error al obtener activos: {r.text}")
             break
+            
         payload = r.json()
         page_items = payload.get("data", [])
+        
+        print(f"Página {page_num} - Ítems devueltos: {len(page_items)}")
         if not page_items:
-            print(f"Página {page_num}: No se encontraron más ítems.")
             break
             
         audios.extend(page_items)
-        print(f"-> Página {page_num} cargada: {len(page_items)} audios (Total acumulado: {len(audios)})")
         
-        # Roblox puede devolver el cursor con diferentes nombres según la versión de su API
-        cursor = payload.get("nextPageCursor") or payload.get("cursor") or payload.get("nextCursor")
+        # Depuración de llaves y cursor
+        cursor = payload.get("nextPageCursor") or payload.get("cursor")
+        print(f"Página {page_num} - Siguiente cursor detectado: {cursor}")
+        
         if not cursor:
-            print("Se han recorrido todas las páginas de Roblox.")
+            print("No hay más cursores. Fin de la paginación.")
             break
             
         page_num += 1
         time.sleep(0.3)
+        
     return audios
 
 def download_private_audio(asset_id):
@@ -214,19 +224,18 @@ def analyze_and_send(asset):
 def main():
     seen = load_seen()
     items = fetch_all_group_audios()
-    print(f"Total de audios encontrados en el grupo: {len(items)}")
+    print(f"Total acumulado de audios encontrados: {len(items)}")
 
-    # Ordenar estrictamente por fecha de creación (del más antiguo al más nuevo)
     items.sort(key=lambda x: x.get("created", ""))
 
     sent_this_run = 0
     for asset in items:
         if sent_this_run >= BATCH_SIZE:
-            print(f"Límite de lote alcanzado ({BATCH_SIZE}). Los siguientes continuarán en la próxima ejecución.")
+            print(f"Límite de lote alcanzado ({BATCH_SIZE}).")
             break
         aid = str(asset.get("assetId"))
         if aid and aid not in seen:
-            print(f"[{sent_this_run + 1}/{BATCH_SIZE}] Procesando ID {aid} ({asset.get('name')}) ...")
+            print(f"[{sent_this_run + 1}/{BATCH_SIZE}] Procesando {aid} ({asset.get('name')})...")
             if analyze_and_send(asset):
                 seen.add(aid)
                 save_seen(seen)
