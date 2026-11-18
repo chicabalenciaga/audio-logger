@@ -11,9 +11,9 @@ from io import BytesIO
 
 GROUP_ID = "648972497"
 WEBHOOK_URL = os.environ["WEBHOOKURL"]
-ROBLOX_COOKIE = os.environ["ROBLOXCOOKIE"]
+ROBLOX_COOKIE = os.environ["ROBLOSECURITY"]
 SEEN_FILE = "seen_audios.json"
-BATCH_SIZE = 50
+BATCH_SIZE = 30  # Reducido a 30 por seguridad para evitar timeouts en GitHub Actions
 
 SESSION = requests.Session()
 SESSION.cookies[".ROBLOSECURITY"] = ROBLOX_COOKIE
@@ -100,112 +100,122 @@ def fetch_all_group_audios():
     audios = []
     cursor = ""
     while True:
-        url = f"https://itemconfiguration.roblox.com/v1/creations/get-assets?assetType=Audio&groupId={GROUP_ID}&limit=100"
-        if cursor:
-            url += f"&cursor={cursor}"
-            
-        r = SESSION.get(url, timeout=15)
-        if r.status_code != 200:
+        try:
+            url = f"https://itemconfiguration.roblox.com/v1/creations/get-assets?assetType=Audio&groupId={GROUP_ID}&limit=100"
+            if cursor:
+                url += f"&cursor={cursor}"
+                
+            r = SESSION.get(url, timeout=15)
+            if r.status_code != 200:
+                break
+                
+            payload = r.json()
+            page_items = payload.get("data", [])
+            if not page_items:
+                break
+                
+            audios.extend(page_items)
+            cursor = payload.get("nextPageCursor") or payload.get("cursor")
+            if not cursor:
+                break
+                
+            time.sleep(0.3)
+        except Exception as e:
+            print(f"Error en paginación: {e}")
             break
-            
-        payload = r.json()
-        page_items = payload.get("data", [])
-        if not page_items:
-            break
-            
-        audios.extend(page_items)
-        cursor = payload.get("nextPageCursor") or payload.get("cursor")
-        if not cursor:
-            break
-            
-        time.sleep(0.3)
-        
     return audios
 
 def download_private_audio(asset_id):
-    r = SESSION.get(f"https://assetdelivery.roblox.com/v1/asset/?id={asset_id}", timeout=20)
-    if r.status_code == 200 and len(r.content) > 100:
-        return r.content
+    try:
+        r = SESSION.get(f"https://assetdelivery.roblox.com/v1/asset/?id={asset_id}", timeout=20)
+        if r.status_code == 200 and len(r.content) > 100:
+            return r.content
+    except Exception:
+        pass
     return None
 
 def post_to_discord(embed, waveform_buf, ogg_bytes, safe_name, size_mb):
     for attempt in range(3):
-        waveform_buf.seek(0)
-        files = {
-            "file1": ("waveform.png", waveform_buf, "image/png"),
-        }
-        if size_mb < 9.5:
-            files["file2"] = (f"{safe_name}.ogg", BytesIO(ogg_bytes), "audio/ogg")
+        try:
+            waveform_buf.seek(0)
+            files = {
+                "file1": ("waveform.png", waveform_buf, "image/png"),
+            }
+            if size_mb < 9.5:
+                files["file2"] = (f"{safe_name}.ogg", BytesIO(ogg_bytes), "audio/ogg")
 
-        res = requests.post(
-            WEBHOOK_URL,
-            data={"payload_json": json.dumps({"embeds": [embed]})},
-            files=files,
-            timeout=30
-        )
-        if res.status_code in (200, 204):
-            return True
-        if res.status_code == 429:
-            time.sleep(5)
-        else:
-            break
+            res = requests.post(
+                WEBHOOK_URL,
+                data={"payload_json": json.dumps({"embeds": [embed]})},
+                files=files,
+                timeout=30
+            )
+            if res.status_code in (200, 204):
+                return True
+            if res.status_code == 429:
+                time.sleep(5)
+            else:
+                break
+        except Exception:
+            time.sleep(2)
     return False
 
 def analyze_and_send(asset):
-    asset_id = str(asset["assetId"])
-    name = asset.get("name", "Unknown")
+    try:
+        asset_id = str(asset["assetId"])
+        name = asset.get("name", "Unknown")
 
-    ogg_bytes = download_private_audio(asset_id)
-    if not ogg_bytes:
+        ogg_bytes = download_private_audio(asset_id)
+        if not ogg_bytes:
+            return False
+
+        size_mb = len(ogg_bytes) / (1024 * 1024)
+        data, rate = sf.read(BytesIO(ogg_bytes))
+        mins, secs = divmod(int(len(data) / rate), 60)
+
+        lufs = pyln.Meter(rate).integrated_loudness(data)
+        peak_linear = np.max(np.abs(data))
+        peak_db = 20 * np.log10(peak_linear) if peak_linear > 0 else -100.0
+        
+        waveform_buf = generate_waveform(data, rate)
+        thumb_url = get_thumbnail(asset_id)
+
+        fields = [
+            {"name": "ID", "value": f"`{asset_id}`", "inline": True},
+            {"name": "Status", "value": "✅ Approved", "inline": True},
+            {"name": "Creator", "value": "Maleficioo", "inline": True},
+            {"name": "Uploaded by", "value": "`@maleficio`", "inline": True},
+            {"name": "Duration", "value": f"{mins}:{secs:02d}", "inline": True},
+            {"name": "Size", "value": f"{size_mb:.2f} MB", "inline": True},
+            {"name": "Format", "value": f"OGG {rate//1000}kHz", "inline": True},
+            {"name": "Loudness", "value": f"{lufs:.1f} LUFS", "inline": True},
+            {"name": "Peak", "value": f"{peak_db:.1f} dBFS", "inline": True},
+            {"name": "Links", "value": f"[View on Roblox](https://create.roblox.com/store/asset/{asset_id})", "inline": False},
+        ]
+
+        embed = {
+            "title": f"🔊 {name}",
+            "description": "*No description*",
+            "color": 16711680,
+            "fields": fields,
+            "image": {"url": "attachment://waveform.png"}
+        }
+
+        if thumb_url:
+            embed["thumbnail"] = {"url": thumb_url}
+
+        safe_name = re.sub(r'[^a-zA-Z0-9_\-\. ]', '', name).strip() or asset_id
+        return post_to_discord(embed, waveform_buf, ogg_bytes, safe_name, size_mb)
+    except Exception as e:
+        print(f"Error procesando asset {asset.get('assetId')}: {e}")
         return False
-
-    size_mb = len(ogg_bytes) / (1024 * 1024)
-    data, rate = sf.read(BytesIO(ogg_bytes))
-    mins, secs = divmod(int(len(data) / rate), 60)
-
-    lufs = pyln.Meter(rate).integrated_loudness(data)
-    peak_linear = np.max(np.abs(data))
-    peak_db = 20 * np.log10(peak_linear) if peak_linear > 0 else -100.0
-    
-    waveform_buf = generate_waveform(data, rate)
-    thumb_url = get_thumbnail(asset_id)
-
-    fields = [
-        {"name": "ID", "value": f"`{asset_id}`", "inline": True},
-        {"name": "Status", "value": "✅ Approved", "inline": True},
-        {"name": "Creator", "value": "Maleficioo", "inline": True},
-        {"name": "Uploaded by", "value": "`@maleficio`", "inline": True},
-        {"name": "Duration", "value": f"{mins}:{secs:02d}", "inline": True},
-        {"name": "Size", "value": f"{size_mb:.2f} MB", "inline": True},
-        {"name": "Format", "value": f"OGG {rate//1000}kHz", "inline": True},
-        {"name": "Loudness", "value": f"{lufs:.1f} LUFS", "inline": True},
-        {"name": "Peak", "value": f"{peak_db:.1f} dBFS", "inline": True},
-        {"name": "Links", "value": f"[View on Roblox](https://create.roblox.com/store/asset/{asset_id})", "inline": False},
-    ]
-
-    embed = {
-        "title": f"🔊 {name}",
-        "description": "*No description*",
-        "color": 16711680,
-        "fields": fields,
-        "image": {"url": "attachment://waveform.png"}
-    }
-
-    if thumb_url:
-        embed["thumbnail"] = {"url": thumb_url}
-
-    safe_name = re.sub(r'[^a-zA-Z0-9_\-\. ]', '', name).strip() or asset_id
-    return post_to_discord(embed, waveform_buf, ogg_bytes, safe_name, size_mb)
 
 def main():
     seen = load_seen()
     items = fetch_all_group_audios()
     print(f"Total de audios encontrados en paginación: {len(items)}")
 
-    # 1. ORDENAR TODA LA LISTA GLOBAL por assetId de menor a mayor (más antiguo a más nuevo)
     items.sort(key=lambda x: int(x.get("assetId", 0)))
-
-    # 2. Filtrar los ya vistos después de ordenar para mantener el orden exacto
     valid_items = [asset for asset in items if str(asset.get("assetId")) not in seen]
     print(f"Audios pendientes por procesar: {len(valid_items)}")
 
