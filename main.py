@@ -48,7 +48,7 @@ def get_thumbnail(asset_id):
     return None
 
 def get_asset_details(asset_id):
-    """Consulta la API individual para obtener la fecha de creación real y oficial"""
+    """Consulta la API individual para obtener la fecha de creación real y oficial del asset"""
     try:
         r = SESSION.get(f"https://itemconfiguration.roblox.com/v1/assets/{asset_id}", timeout=10)
         if r.status_code == 200:
@@ -160,7 +160,8 @@ def post_to_discord(embed, waveform_buf, ogg_bytes, safe_name, size_mb):
         if res.status_code in (200, 204):
             return True
         if res.status_code == 429:
-            time.sleep(5)
+            retry_after = res.json().get("retry_after", 5)
+            time.sleep(float(retry_after) + 0.5)
         else:
             break
     return False
@@ -169,11 +170,12 @@ def analyze_and_send(asset):
     asset_id = str(asset["assetId"])
     name = asset.get("name", "Unknown")
     
-    created_raw = asset.get("resolved_created") or asset.get("created") or asset.get("updated") or ""
-    upload_date = "Unknown date"
-    if created_raw:
+    created_raw = asset.get("resolved_created") or asset.get("created") or asset.get("updated")
+    
+    upload_date = None
+    if created_raw and not str(created_raw).startswith("0000") and not str(created_raw).startswith("2000-01-01"):
         try:
-            dt = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(str(created_raw).replace("Z", "+00:00"))
             upload_date = dt.strftime("%B %d, %Y %I:%M %p")
         except Exception:
             upload_date = str(created_raw)[:16]
@@ -193,23 +195,28 @@ def analyze_and_send(asset):
     waveform_buf = generate_waveform(data, rate)
     thumb_url = get_thumbnail(asset_id)
 
+    fields = [
+        {"name": "ID", "value": f"`{asset_id}`", "inline": True},
+        {"name": "Status", "value": "✅ Approved", "inline": True},
+        {"name": "Creator", "value": "Maleficioo", "inline": True},
+        {"name": "Uploaded by", "value": "`@maleficio`", "inline": True},
+        {"name": "Duration", "value": f"{mins}:{secs:02d}", "inline": True},
+        {"name": "Size", "value": f"{size_mb:.2f} MB", "inline": True},
+        {"name": "Format", "value": f"OGG {rate//1000}kHz", "inline": True},
+        {"name": "Loudness", "value": f"{lufs:.1f} LUFS", "inline": True},
+        {"name": "Peak", "value": f"{peak_db:.1f} dBFS", "inline": True},
+    ]
+
+    if upload_date:
+        fields.append({"name": "Uploaded", "value": upload_date, "inline": False})
+
+    fields.append({"name": "Links", "value": f"[View on Roblox](https://create.roblox.com/store/asset/{asset_id})", "inline": False})
+
     embed = {
         "title": f"🔊 {name}",
         "description": "*No description*",
         "color": 16711680,
-        "fields": [
-            {"name": "ID", "value": f"`{asset_id}`", "inline": True},
-            {"name": "Status", "value": "✅ Approved", "inline": True},
-            {"name": "Creator", "value": "Maleficioo", "inline": True},
-            {"name": "Uploaded by", "value": "`@maleficio`", "inline": True},
-            {"name": "Duration", "value": f"{mins}:{secs:02d}", "inline": True},
-            {"name": "Size", "value": f"{size_mb:.2f} MB", "inline": True},
-            {"name": "Format", "value": f"OGG {rate//1000}kHz", "inline": True},
-            {"name": "Loudness", "value": f"{lufs:.1f} LUFS", "inline": True},
-            {"name": "Peak", "value": f"{peak_db:.1f} dBFS", "inline": True},
-            {"name": "Uploaded", "value": upload_date, "inline": False},
-            {"name": "Links", "value": f"[View on Roblox](https://create.roblox.com/store/asset/{asset_id})", "inline": False},
-        ],
+        "fields": fields,
         "image": {"url": "attachment://waveform.png"}
     }
 
@@ -224,30 +231,43 @@ def main():
     items = fetch_all_group_audios()
     print(f"Total de audios encontrados en bruto: {len(items)}")
 
-    # Asignar la fecha oficial a cada audio para poder ordenarlos bien
-    print("Obteniendo fechas reales de creación para ordenar cronológicamente...")
+    print("Obteniendo y verificando fechas reales de creación...")
+    valid_items = []
+    
     for asset in items:
         aid = str(asset.get("assetId"))
-        c_date = asset.get("created") or get_asset_details(aid) or "2000-01-01T00:00:00Z"
-        asset["resolved_created"] = c_date
-        time.sleep(0.1) # Pausa pequeña para no saturar la API
+        if aid in seen:
+            continue
+            
+        c_date = asset.get("created") or get_asset_details(aid)
+        
+        if c_date and not str(c_date).startswith("0000") and not str(c_date).startswith("2000-01-01"):
+            asset["resolved_created"] = c_date
+        else:
+            # Si no hay fecha exacta disponible, usamos el assetId numérico como referencia cronológica segura
+            asset["resolved_created"] = f"2023-01-01T00:00:00Z"
+            
+        valid_items.append(asset)
+        time.sleep(0.1)
 
-    # Ordenar estrictamente del MÁS VIEJO al MÁS NUEVO (ascendente)
-    items.sort(key=lambda x: x.get("resolved_created", ""))
+    # Ordenar estrictamente del MÁS VIEJO al MÁS NUEVO basándose en la fecha real
+    valid_items.sort(key=lambda x: (x.get("resolved_created", ""), int(x.get("assetId", 0))))
 
     sent_this_run = 0
-    for asset in items:
+    for asset in valid_items:
         if sent_this_run >= BATCH_SIZE:
             print(f"Límite de lote alcanzado ({BATCH_SIZE}). El resto se procesará en la próxima ejecución.")
             break
+            
         aid = str(asset.get("assetId"))
-        if aid and aid not in seen:
-            print(f"Procesando {aid} ({asset.get('name')}) - Fecha: {asset.get('resolved_created')}...")
-            if analyze_and_send(asset):
-                seen.add(aid)
-                save_seen(seen)
-                sent_this_run += 1
-            time.sleep(2.5)
+        print(f"Procesando audio ID {aid} ({asset.get('name')}) - Fecha: {asset.get('resolved_created')}...")
+        
+        if analyze_and_send(asset):
+            seen.add(aid)
+            save_seen(seen)
+            sent_this_run += 1
+            
+        time.sleep(2.5)
 
 if __name__ == "__main__":
     main()
