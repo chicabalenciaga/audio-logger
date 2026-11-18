@@ -14,7 +14,7 @@ GROUP_ID = "648972497"
 WEBHOOK_URL = os.environ["WEBHOOKURL"]
 ROBLOX_COOKIE = os.environ["ROBLOXCOOKIE"]
 SEEN_FILE = "seen_audios.json"
-BATCH_SIZE = 50  # Límite de audios por ejecución
+BATCH_SIZE = 50
 
 SESSION = requests.Session()
 SESSION.cookies[".ROBLOSECURITY"] = ROBLOX_COOKIE
@@ -43,6 +43,17 @@ def get_thumbnail(asset_id):
             data = r.json().get("data", [])
             if data and data[0].get("imageUrl"):
                 return data[0]["imageUrl"]
+    except Exception:
+        pass
+    return None
+
+def get_asset_details(asset_id):
+    """Consulta la API de configuración para obtener la fecha de creación real y oficial del asset"""
+    try:
+        r = SESSION.get(f"https://itemconfiguration.roblox.com/v1/assets/{asset_id}", timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            return data.get("created") or data.get("updated")
     except Exception:
         pass
     return None
@@ -149,8 +160,7 @@ def post_to_discord(embed, waveform_buf, ogg_bytes, safe_name, size_mb):
         if res.status_code in (200, 204):
             return True
         if res.status_code == 429:
-            retry_after = res.json().get("retry_after", 5)
-            time.sleep(float(retry_after) + 0.5)
+            time.sleep(5)
         else:
             break
     return False
@@ -158,7 +168,9 @@ def post_to_discord(embed, waveform_buf, ogg_bytes, safe_name, size_mb):
 def analyze_and_send(asset):
     asset_id = str(asset["assetId"])
     name = asset.get("name", "Unknown")
-    created_raw = asset.get("created") or asset.get("updated") or ""
+    
+    # Obtener la fecha oficial consultando los detalles individuales del asset
+    created_raw = get_asset_details(asset_id) or asset.get("created") or asset.get("updated") or ""
     
     upload_date = "Unknown date"
     if created_raw:
@@ -213,9 +225,6 @@ def main():
     seen = load_seen()
     items = fetch_all_group_audios()
     print(f"Total de audios encontrados: {len(items)}")
-
-    # Ordenar estrictamente del más antiguo al más nuevo usando la fecha real
-    items.sort(key=lambda x: x.get("created", "") or x.get("updated", ""))
 
     sent_this_run = 0
     for asset in items:
