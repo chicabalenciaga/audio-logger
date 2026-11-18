@@ -14,7 +14,7 @@ GROUP_ID = "648972497"
 WEBHOOK_URL = os.environ["WEBHOOKURL"]
 ROBLOX_COOKIE = os.environ["ROBLOXCOOKIE"]
 SEEN_FILE = "seen_audios.json"
-BATCH_SIZE = 50
+BATCH_SIZE = 50  # Límite de audios por ejecución
 
 SESSION = requests.Session()
 SESSION.cookies[".ROBLOSECURITY"] = ROBLOX_COOKIE
@@ -102,33 +102,22 @@ def fetch_all_group_audios():
     cursor = ""
     page_num = 1
     while True:
-        # Probamos con un límite mayor (100) para barrer más rápido
         url = f"https://itemconfiguration.roblox.com/v1/creations/get-assets?assetType=Audio&groupId={GROUP_ID}&limit=100"
         if cursor:
             url += f"&cursor={cursor}"
             
         r = SESSION.get(url, timeout=15)
-        print(f"Página {page_num} - Status HTTP: {r.status_code}")
-        
         if r.status_code != 200:
-            print(f"Error al obtener activos: {r.text}")
             break
             
         payload = r.json()
         page_items = payload.get("data", [])
-        
-        print(f"Página {page_num} - Ítems devueltos: {len(page_items)}")
         if not page_items:
             break
             
         audios.extend(page_items)
-        
-        # Depuración de llaves y cursor
         cursor = payload.get("nextPageCursor") or payload.get("cursor")
-        print(f"Página {page_num} - Siguiente cursor detectado: {cursor}")
-        
         if not cursor:
-            print("No hay más cursores. Fin de la paginación.")
             break
             
         page_num += 1
@@ -140,7 +129,6 @@ def download_private_audio(asset_id):
     r = SESSION.get(f"https://assetdelivery.roblox.com/v1/asset/?id={asset_id}", timeout=20)
     if r.status_code == 200 and len(r.content) > 100:
         return r.content
-    print(f"Download failed for {asset_id}: status {r.status_code}")
     return None
 
 def post_to_discord(embed, waveform_buf, ogg_bytes, safe_name, size_mb):
@@ -162,23 +150,23 @@ def post_to_discord(embed, waveform_buf, ogg_bytes, safe_name, size_mb):
             return True
         if res.status_code == 429:
             retry_after = res.json().get("retry_after", 5)
-            print(f"Discord rate limit hit, waiting {retry_after}s...")
             time.sleep(float(retry_after) + 0.5)
         else:
-            print(f"Discord error {res.status_code}: {res.text}")
             break
     return False
 
 def analyze_and_send(asset):
     asset_id = str(asset["assetId"])
     name = asset.get("name", "Unknown")
-    created_raw = asset.get("created", "")
+    created_raw = asset.get("created") or asset.get("updated") or ""
     
-    try:
-        dt = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
-        upload_date = dt.strftime("%B %d, %Y %I:%M %p")
-    except Exception:
-        upload_date = "Recently"
+    upload_date = "Unknown date"
+    if created_raw:
+        try:
+            dt = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
+            upload_date = dt.strftime("%B %d, %Y %I:%M %p")
+        except Exception:
+            upload_date = str(created_raw)[:16]
 
     ogg_bytes = download_private_audio(asset_id)
     if not ogg_bytes:
@@ -224,9 +212,10 @@ def analyze_and_send(asset):
 def main():
     seen = load_seen()
     items = fetch_all_group_audios()
-    print(f"Total acumulado de audios encontrados: {len(items)}")
+    print(f"Total de audios encontrados: {len(items)}")
 
-    items.sort(key=lambda x: x.get("created", ""))
+    # Ordenar estrictamente del más antiguo al más nuevo usando la fecha real
+    items.sort(key=lambda x: x.get("created", "") or x.get("updated", ""))
 
     sent_this_run = 0
     for asset in items:
@@ -235,7 +224,7 @@ def main():
             break
         aid = str(asset.get("assetId"))
         if aid and aid not in seen:
-            print(f"[{sent_this_run + 1}/{BATCH_SIZE}] Procesando {aid} ({asset.get('name')})...")
+            print(f"Procesando {aid} ({asset.get('name')})...")
             if analyze_and_send(asset):
                 seen.add(aid)
                 save_seen(seen)
