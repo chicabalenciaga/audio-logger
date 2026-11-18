@@ -11,8 +11,6 @@ from io import BytesIO
 
 GROUP_ID = "648972497"
 WEBHOOK_URL = os.environ.get("WEBHOOKURL", "")
-
-# Usamos .get() de forma segura para que nunca lance KeyError sin importar la variable
 ROBLOX_COOKIE = os.environ.get("ROBLOSECURITY") or os.environ.get("ROBLOXCOOKIE", "")
 
 SEEN_FILE = "seen_audios.json"
@@ -170,7 +168,6 @@ def analyze_and_send(asset):
         asset_id = str(asset["assetId"])
         name = asset.get("name", "Unknown")
 
-1
         ogg_bytes = download_private_audio(asset_id)
         if not ogg_bytes:
             return False
