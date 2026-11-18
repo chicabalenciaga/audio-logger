@@ -48,7 +48,7 @@ def get_thumbnail(asset_id):
     return None
 
 def get_asset_details(asset_id):
-    """Consulta la API de configuración para obtener la fecha de creación real y oficial del asset"""
+    """Consulta la API individual para obtener la fecha de creación real y oficial"""
     try:
         r = SESSION.get(f"https://itemconfiguration.roblox.com/v1/assets/{asset_id}", timeout=10)
         if r.status_code == 200:
@@ -169,9 +169,7 @@ def analyze_and_send(asset):
     asset_id = str(asset["assetId"])
     name = asset.get("name", "Unknown")
     
-    # Obtener la fecha oficial consultando los detalles individuales del asset
-    created_raw = get_asset_details(asset_id) or asset.get("created") or asset.get("updated") or ""
-    
+    created_raw = asset.get("resolved_created") or asset.get("created") or asset.get("updated") or ""
     upload_date = "Unknown date"
     if created_raw:
         try:
@@ -224,16 +222,27 @@ def analyze_and_send(asset):
 def main():
     seen = load_seen()
     items = fetch_all_group_audios()
-    print(f"Total de audios encontrados: {len(items)}")
+    print(f"Total de audios encontrados en bruto: {len(items)}")
+
+    # Asignar la fecha oficial a cada audio para poder ordenarlos bien
+    print("Obteniendo fechas reales de creación para ordenar cronológicamente...")
+    for asset in items:
+        aid = str(asset.get("assetId"))
+        c_date = asset.get("created") or get_asset_details(aid) or "2000-01-01T00:00:00Z"
+        asset["resolved_created"] = c_date
+        time.sleep(0.1) # Pausa pequeña para no saturar la API
+
+    # Ordenar estrictamente del MÁS VIEJO al MÁS NUEVO (ascendente)
+    items.sort(key=lambda x: x.get("resolved_created", ""))
 
     sent_this_run = 0
     for asset in items:
         if sent_this_run >= BATCH_SIZE:
-            print(f"Límite de lote alcanzado ({BATCH_SIZE}).")
+            print(f"Límite de lote alcanzado ({BATCH_SIZE}). El resto se procesará en la próxima ejecución.")
             break
         aid = str(asset.get("assetId"))
         if aid and aid not in seen:
-            print(f"Procesando {aid} ({asset.get('name')})...")
+            print(f"Procesando {aid} ({asset.get('name')}) - Fecha: {asset.get('resolved_created')}...")
             if analyze_and_send(asset):
                 seen.add(aid)
                 save_seen(seen)
