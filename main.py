@@ -10,13 +10,17 @@ import matplotlib.pyplot as plt
 from io import BytesIO
 
 GROUP_ID = "648972497"
-WEBHOOK_URL = os.environ["WEBHOOKURL"]
-ROBLOX_COOKIE = os.environ["ROBLOSECURITY"]
+WEBHOOK_URL = os.environ.get("WEBHOOKURL", "")
+# Acepta tanto ROBLOXCOOKIE como ROBLOSECURITY para evitar errores
+ROBLOX_COOKIE = os.environ.get("ROBLOXCOOKIE") or os.environ.get("ROBLOSECURITY", "")
+
 SEEN_FILE = "seen_audios.json"
-BATCH_SIZE = 30  # Reducido a 30 por seguridad para evitar timeouts en GitHub Actions
+BATCH_SIZE = 30
 
 SESSION = requests.Session()
-SESSION.cookies[".ROBLOSECURITY"] = ROBLOX_COOKIE
+if ROBLOX_COOKIE:
+    SESSION.cookies[".ROBLOSECURITY"] = ROBLOX_COOKIE
+
 SESSION.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Referer": "https://create.roblox.com/"
