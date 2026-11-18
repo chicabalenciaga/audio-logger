@@ -5,6 +5,9 @@ on:
     - cron: '*/5 * * * *' # Corre cada 5 minutos
   workflow_dispatch:
 
+permissions:
+  contents: write  # <-- Esto permite que el workflow guarde y haga push del seen_audios.json
+
 concurrency:
   group: check-group-audios
   cancel-in-progress: true
