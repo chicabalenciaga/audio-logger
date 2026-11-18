@@ -30,7 +30,7 @@ def load_seen():
 
 def save_seen(seen_set):
     with open(SEEN_FILE, "w") as f:
-        json.dump(sorted(list(seen_set)), f)
+        json.dump(sorted(list(seen_set), key=int), f)
 
 def get_thumbnail(asset_id):
     try:
@@ -200,18 +200,19 @@ def analyze_and_send(asset):
 def main():
     seen = load_seen()
     items = fetch_all_group_audios()
-    print(f"Total de audios encontrados: {len(items)}")
+    print(f"Total de audios encontrados en paginación: {len(items)}")
 
-    # Filtrar solo los que NO han sido vistos
+    # 1. ORDENAR TODA LA LISTA GLOBAL por assetId de menor a mayor (más antiguo a más nuevo)
+    items.sort(key=lambda x: int(x.get("assetId", 0)))
+
+    # 2. Filtrar los ya vistos después de ordenar para mantener el orden exacto
     valid_items = [asset for asset in items if str(asset.get("assetId")) not in seen]
-
-    # ORDEN CRONOLÓGICO ESTRICTO POR ID (El ID más bajo es el más viejo, el ID más alto es el más nuevo)
-    valid_items.sort(key=lambda x: int(x.get("assetId", 0)))
+    print(f"Audios pendientes por procesar: {len(valid_items)}")
 
     sent_this_run = 0
     for asset in valid_items:
         if sent_this_run >= BATCH_SIZE:
-            print(f"Límite de lote alcanzado ({BATCH_SIZE}). El resto se procesará en la próxima ejecución.")
+            print(f"Límite de lote alcanzado ({BATCH_SIZE}).")
             break
             
         aid = str(asset.get("assetId"))
@@ -219,7 +220,7 @@ def main():
         
         if analyze_and_send(asset):
             seen.add(aid)
-            save_seen(seen) # Guarda y actualiza el archivo localmente
+            save_seen(seen)
             sent_this_run += 1
             
         time.sleep(2.5)
