@@ -8,7 +8,6 @@ import soundfile as sf
 import pyloudnorm as pyln
 import matplotlib.pyplot as plt
 from io import BytesIO
-from datetime import datetime
 
 GROUP_ID = "648972497"
 WEBHOOK_URL = os.environ["WEBHOOKURL"]
@@ -43,17 +42,6 @@ def get_thumbnail(asset_id):
             data = r.json().get("data", [])
             if data and data[0].get("imageUrl"):
                 return data[0]["imageUrl"]
-    except Exception:
-        pass
-    return None
-
-def get_asset_details(asset_id):
-    """Consulta la API individual para obtener la fecha de creación real y oficial del asset"""
-    try:
-        r = SESSION.get(f"https://itemconfiguration.roblox.com/v1/assets/{asset_id}", timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            return data.get("created") or data.get("updated")
     except Exception:
         pass
     return None
@@ -111,7 +99,6 @@ def generate_waveform(audio_data, rate):
 def fetch_all_group_audios():
     audios = []
     cursor = ""
-    page_num = 1
     while True:
         url = f"https://itemconfiguration.roblox.com/v1/creations/get-assets?assetType=Audio&groupId={GROUP_ID}&limit=100"
         if cursor:
@@ -131,7 +118,6 @@ def fetch_all_group_audios():
         if not cursor:
             break
             
-        page_num += 1
         time.sleep(0.3)
         
     return audios
@@ -160,8 +146,7 @@ def post_to_discord(embed, waveform_buf, ogg_bytes, safe_name, size_mb):
         if res.status_code in (200, 204):
             return True
         if res.status_code == 429:
-            retry_after = res.json().get("retry_after", 5)
-            time.sleep(float(retry_after) + 0.5)
+            time.sleep(5)
         else:
             break
     return False
@@ -169,16 +154,6 @@ def post_to_discord(embed, waveform_buf, ogg_bytes, safe_name, size_mb):
 def analyze_and_send(asset):
     asset_id = str(asset["assetId"])
     name = asset.get("name", "Unknown")
-    
-    created_raw = asset.get("resolved_created") or asset.get("created") or asset.get("updated")
-    
-    upload_date = None
-    if created_raw and not str(created_raw).startswith("0000") and not str(created_raw).startswith("2000-01-01"):
-        try:
-            dt = datetime.fromisoformat(str(created_raw).replace("Z", "+00:00"))
-            upload_date = dt.strftime("%B %d, %Y %I:%M %p")
-        except Exception:
-            upload_date = str(created_raw)[:16]
 
     ogg_bytes = download_private_audio(asset_id)
     if not ogg_bytes:
@@ -205,12 +180,8 @@ def analyze_and_send(asset):
         {"name": "Format", "value": f"OGG {rate//1000}kHz", "inline": True},
         {"name": "Loudness", "value": f"{lufs:.1f} LUFS", "inline": True},
         {"name": "Peak", "value": f"{peak_db:.1f} dBFS", "inline": True},
+        {"name": "Links", "value": f"[View on Roblox](https://create.roblox.com/store/asset/{asset_id})", "inline": False},
     ]
-
-    if upload_date:
-        fields.append({"name": "Uploaded", "value": upload_date, "inline": False})
-
-    fields.append({"name": "Links", "value": f"[View on Roblox](https://create.roblox.com/store/asset/{asset_id})", "inline": False})
 
     embed = {
         "title": f"🔊 {name}",
@@ -229,29 +200,13 @@ def analyze_and_send(asset):
 def main():
     seen = load_seen()
     items = fetch_all_group_audios()
-    print(f"Total de audios encontrados en bruto: {len(items)}")
+    print(f"Total de audios encontrados: {len(items)}")
 
-    print("Obteniendo y verificando fechas reales de creación...")
-    valid_items = []
-    
-    for asset in items:
-        aid = str(asset.get("assetId"))
-        if aid in seen:
-            continue
-            
-        c_date = asset.get("created") or get_asset_details(aid)
-        
-        if c_date and not str(c_date).startswith("0000") and not str(c_date).startswith("2000-01-01"):
-            asset["resolved_created"] = c_date
-        else:
-            # Si no hay fecha exacta disponible, usamos el assetId numérico como referencia cronológica segura
-            asset["resolved_created"] = f"2023-01-01T00:00:00Z"
-            
-        valid_items.append(asset)
-        time.sleep(0.1)
+    # Filtrar solo los que NO han sido vistos
+    valid_items = [asset for asset in items if str(asset.get("assetId")) not in seen]
 
-    # Ordenar estrictamente del MÁS VIEJO al MÁS NUEVO basándose en la fecha real
-    valid_items.sort(key=lambda x: (x.get("resolved_created", ""), int(x.get("assetId", 0))))
+    # ORDEN CRONOLÓGICO ESTRICTO POR ID (El ID más bajo es el más viejo, el ID más alto es el más nuevo)
+    valid_items.sort(key=lambda x: int(x.get("assetId", 0)))
 
     sent_this_run = 0
     for asset in valid_items:
@@ -260,11 +215,11 @@ def main():
             break
             
         aid = str(asset.get("assetId"))
-        print(f"Procesando audio ID {aid} ({asset.get('name')}) - Fecha: {asset.get('resolved_created')}...")
+        print(f"Procesando audio ID {aid} ({asset.get('name')})...")
         
         if analyze_and_send(asset):
             seen.add(aid)
-            save_seen(seen)
+            save_seen(seen) # Guarda y actualiza el archivo localmente
             sent_this_run += 1
             
         time.sleep(2.5)
