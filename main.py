@@ -27,8 +27,15 @@ SESSION.headers.update({
 
 def load_seen():
     if os.path.exists(SEEN_FILE):
-        with open(SEEN_FILE, "r") as f:
-            return set(json.load(f))
+        try:
+            with open(SEEN_FILE, "r") as f:
+                content = f.read().strip()
+                if not content:
+                    return set()
+                return set(json.loads(content))
+        except Exception:
+            # Si hay cualquier error de lectura o JSON corrupto, retorna un set vacío para sanarlo
+            return set()
     return set()
 
 def save_seen(seen_set):
